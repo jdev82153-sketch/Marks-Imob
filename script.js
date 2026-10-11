@@ -1,407 +1,412 @@
 
-"use strict";
+// ============================================
+// MARKS IMOB — script.js
+// Login, dashboard, imóveis, interessados e negociações
+// ============================================
 
-/*
-  MARKS IMOB — SUPABASE
-  Cole a URL do projeto e a Publishable key abaixo.
-  Nunca coloque uma service_role ou secret key no site.
-*/
-
+// 1. CONFIGURAÇÃO DO SUPABASE
+// Mantenha sua Publishable key atual neste campo.
 const SUPABASE_URL = "https://anemrbmvjrujlwqmannf.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_N4LE8d32FUxvduzrV1vbNw_TAOazd_e";
 
-const STORAGE_KEY = "marksImob_demo_v1";
+// Normaliza a URL para evitar caminhos duplicados.
+function normalizeSupabaseUrl(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/(rest\/v1|auth\/v1)$/, "");
+}
 
-const stages = [
-  "Novo",
-  "Em contato",
-  "Visita agendada",
-  "Proposta enviada",
-  "Concluído",
-  "Perdido"
-];
-
-const $ = id => document.getElementById(id);
+const PROJECT_URL = normalizeSupabaseUrl(SUPABASE_URL);
 
 let supabaseClient = null;
 let currentUser = null;
-let currentOrg = null;
-let data = { properties: [], leads: [] };
-let toastTimer = null;
-let busy = false;
+let currentOrganization = null;
+let properties = [];
+let leads = [];
+let deals = [];
+let currentView = "dashboard";
+let isSaving = false;
 
-const configurationReady =
-  SUPABASE_URL.startsWith("https://") &&
-  SUPABASE_URL.includes(".supabase.co") &&
-  SUPABASE_PUBLISHABLE_KEY.startsWith("sb_publishable_") &&
-  !SUPABASE_URL.includes("COLE_AQUI") &&
-  !SUPABASE_PUBLISHABLE_KEY.includes("COLE_AQUI");
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-if (configurationReady && window.supabase?.createClient) {
-  supabaseClient = window.supabase.createClient(
-    SUPABASE_URL,
-    SUPABASE_PUBLISHABLE_KEY
-  );
+function byId(id) {
+  return document.getElementById(id);
 }
 
-/* UTILITÁRIOS */
-
 function escapeHTML(value) {
-  return String(value ?? "").replace(/[&<>"']/g, char => ({
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
-    "'": "&#39;"
-  })[char]);
+    "'": "&#039;"
+  })[character]);
 }
 
-function money(value) {
-  return Number(value || 0).toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-    maximumFractionDigits: 2
-  });
-}
-
-function shortDate(value) {
-  if (!value) return "—";
-  return new Date(value).toLocaleDateString("pt-BR");
-}
-
-function notify(message) {
-  const toast = $("toast");
+function showToast(message, type = "success") {
+  const toast = byId("toast");
   if (!toast) {
     console.log(message);
     return;
   }
 
   toast.textContent = message;
-  toast.classList.add("show");
+  toast.classList.remove("error", "success", "show");
+  toast.classList.add(type, "show");
 
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => {
     toast.classList.remove("show");
-  }, 2800);
+  }, 3500);
 }
 
-function showLoginError(message) {
-  const error = $("loginError");
-  if (!error) {
-    alert(message);
-    return;
+function setLoginError(message = "") {
+  const errorElement = byId("loginError");
+  if (errorElement) {
+    errorElement.textContent = message;
+    errorElement.hidden = !message;
   }
-
-  error.textContent = message;
-  error.hidden = false;
 }
 
-function clearLoginError() {
-  const error = $("loginError");
-  if (error) {
-    error.textContent = "";
-    error.hidden = true;
-  }
+function setLoginLoading(loading) {
+  const button = byId("loginButton");
+  if (!button) return;
+
+  button.disabled = loading;
+  button.textContent = loading ? "Entrando..." : "Entrar";
 }
 
 function setConnectionLabel(message) {
-  const label = $("connectionLabel");
-  if (label) label.textContent = message;
+  const element = byId("connectionLabel");
+  if (element) element.textContent = message;
 }
 
-function setLoginBusy(value) {
-  const button = $("loginButton");
-  if (!button) return;
-
-  button.disabled = value;
-  button.textContent = value ? "Entrando..." : "Entrar na plataforma";
+function formatMoney(value) {
+  return Number(value || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL"
+  });
 }
 
-/* SESSÃO E LOGIN */
+function formatDate(value) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  return date.toLocaleDateString("pt-BR");
+}
+
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
+function setHidden(element, hidden) {
+  if (element) element.hidden = hidden;
+}
 
 function showLogin() {
-  const login = $("loginScreen");
-  const app = $("app");
-
-  if (login) login.hidden = false;
-  if (app) app.hidden = true;
-
-  setConnectionLabel("DESCONECTADO");
+  setHidden(byId("loginScreen"), false);
+  setHidden(byId("app"), true);
 }
 
-function showApp() {
-  const login = $("loginScreen");
-  const app = $("app");
+function showApplication() {
+  setHidden(byId("loginScreen"), true);
+  setHidden(byId("app"), false);
+}
 
-  if (login) login.hidden = true;
-  if (app) app.hidden = false;
+function closeModal(modalId) {
+  const modal = byId(modalId);
+  if (modal) modal.classList.remove("open", "active", "show");
+}
 
-  const email = currentUser?.email || "Usuário";
-  const name = email.split("@")[0] || "Usuário";
+function openModal(modalId) {
+  const modal = byId(modalId);
+  if (modal) modal.classList.add("open");
+}
 
-  if ($("profileName")) $("profileName").textContent = name;
-  if ($("profileEmail")) $("profileEmail").textContent = email;
-  if ($("profileAvatar")) {
-    $("profileAvatar").textContent = name.charAt(0).toUpperCase();
+// ============================================
+// 2. INICIALIZAÇÃO DO SUPABASE
+// ============================================
+
+function initializeSupabase() {
+  if (!window.supabase?.createClient) {
+    throw new Error(
+      "A biblioteca do Supabase não carregou. Confira o script CDN no index.html."
+    );
   }
 
-  setConnectionLabel("CONECTADO");
+  if (
+    !PROJECT_URL.startsWith("https://") ||
+    !PROJECT_URL.includes(".supabase.co") ||
+    SUPABASE_PUBLISHABLE_KEY.startsWith("sb_publishable_N4LE8d32FUxvduzrV1vbNw_TAOazd_e") ||
+    !SUPABASE_PUBLISHABLE_KEY.trim()
+  ) {
+    throw new Error(
+      "Confira a URL do projeto e a Publishable key no início do script.js."
+    );
+  }
+
+  supabaseClient = window.supabase.createClient(
+    PROJECT_URL,
+    SUPABASE_PUBLISHABLE_KEY.trim(),
+    {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
+      }
+    }
+  );
 }
 
-/*
-  Cada usuário terá uma imobiliária própria.
-  As políticas RLS do Supabase também protegem os dados.
-*/
+// ============================================
+// 3. LOGIN E SESSÃO
+// ============================================
 
-async function getOrCreateOrganization(user) {
-  const { data: existing, error: searchError } = await supabaseClient
+async function handleLogin(event) {
+  event.preventDefault();
+  setLoginError("");
+
+  if (!supabaseClient) {
+    setLoginError("O sistema não conseguiu iniciar. Confira a configuração.");
+    return;
+  }
+
+  const email = normalizeText(byId("loginEmail")?.value).toLowerCase();
+  const password = byId("loginPassword")?.value || "";
+
+  if (!email || !password) {
+    setLoginError("Preencha o e-mail e a senha.");
+    return;
+  }
+
+  setLoginLoading(true);
+
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) throw error;
+    if (!data?.user) throw new Error("Não foi possível identificar o usuário.");
+
+    currentUser = data.user;
+    await enterApplication();
+  } catch (error) {
+    console.error("Erro de login:", error);
+    setLoginError(getFriendlyAuthError(error));
+  } finally {
+    setLoginLoading(false);
+  }
+}
+
+function getFriendlyAuthError(error) {
+  const message = String(error?.message || "");
+
+  if (/invalid login credentials/i.test(message)) {
+    return "E-mail ou senha incorretos.";
+  }
+
+  if (/email not confirmed/i.test(message)) {
+    return "Confirme seu e-mail no Supabase antes de entrar.";
+  }
+
+  if (/failed to fetch|network|fetch/i.test(message)) {
+    return "Não foi possível conectar ao Supabase. Confira sua conexão e a URL do projeto.";
+  }
+
+  if (/invalid path specified in request url/i.test(message)) {
+    return "O Supabase recebeu um caminho inválido. Confira a URL do projeto e se a biblioteca está carregada corretamente.";
+  }
+
+  return "Não foi possível entrar: " + message;
+}
+
+async function handleLogout() {
+  try {
+    if (supabaseClient) {
+      const { error } = await supabaseClient.auth.signOut();
+      if (error) throw error;
+    }
+
+    currentUser = null;
+    currentOrganization = null;
+    properties = [];
+    leads = [];
+    deals = [];
+
+    showLogin();
+    setConnectionLabel("Desconectado");
+
+    if (byId("loginPassword")) byId("loginPassword").value = "";
+    setLoginError("");
+  } catch (error) {
+    console.error("Erro ao sair:", error);
+    showToast("Não foi possível encerrar a sessão.", "error");
+  }
+}
+
+async function enterApplication() {
+  if (!currentUser) return;
+
+  showApplication();
+  setConnectionLabel("Conectando...");
+
+  const profileName = byId("profileName");
+  const profileEmail = byId("profileEmail");
+  const profileAvatar = byId("profileAvatar");
+
+  if (profileName) {
+    profileName.textContent =
+      currentUser.user_metadata?.full_name ||
+      currentUser.user_metadata?.name ||
+      currentUser.email?.split("@")[0] ||
+      "Usuário";
+  }
+
+  if (profileEmail) profileEmail.textContent = currentUser.email || "";
+
+  if (profileAvatar) {
+    profileAvatar.textContent =
+      (currentUser.email || "U").charAt(0).toUpperCase();
+  }
+
+  try {
+    await getOrCreateOrganization();
+    await loadData();
+    renderAll();
+    setConnectionLabel("Conectado");
+    navigateTo("dashboard");
+  } catch (error) {
+    console.error("Erro ao carregar a imobiliária:", error);
+    setConnectionLabel("Erro de conexão");
+    showToast(
+      "O login funcionou, mas houve um erro ao carregar os dados. Confira as tabelas e as políticas RLS.",
+      "error"
+    );
+  }
+}
+
+// ============================================
+// 4. IMOBILIÁRIA DO USUÁRIO
+// ============================================
+
+async function getOrCreateOrganization() {
+  const { data, error } = await supabaseClient
     .from("imobiliarias")
     .select("*")
-    .eq("owner_id", user.id)
-    .maybeSingle();
+    .eq("owner_id", currentUser.id)
+    .limit(1);
 
-  if (searchError) throw searchError;
-  if (existing) return existing;
+  if (error) throw error;
 
-  const suggestedName = user.email
-    ? user.email.split("@")[0]
-    : "Minha imobiliária";
+  if (data?.length) {
+    currentOrganization = data[0];
+    return currentOrganization;
+  }
+
+  const organizationName =
+    currentUser.user_metadata?.company_name ||
+    currentUser.user_metadata?.full_name ||
+    currentUser.email?.split("@")[0] ||
+    "Minha Imobiliária";
 
   const { data: created, error: createError } = await supabaseClient
     .from("imobiliarias")
     .insert({
-      owner_id: user.id,
-      nome: suggestedName
+      nome: organizationName,
+      owner_id: currentUser.id
     })
     .select("*")
     .single();
 
-  if (!createError) return created;
+  if (createError) throw createError;
 
-  // Se a imobiliária já tiver sido criada em outra tentativa,
-  // tenta localizar o registro novamente.
-  const { data: retry, error: retryError } = await supabaseClient
-    .from("imobiliarias")
-    .select("*")
-    .eq("owner_id", user.id)
-    .maybeSingle();
-
-  if (!retryError && retry) return retry;
-
-  throw createError;
+  currentOrganization = created;
+  return currentOrganization;
 }
 
-async function enterApplication(user) {
-  currentUser = user;
-  showApp();
-  setConnectionLabel("CARREGANDO...");
-
-  try {
-    currentOrg = await getOrCreateOrganization(user);
-    await loadData();
-    renderAll();
-    setConnectionLabel("CONECTADO");
-  } catch (error) {
-    console.error("Erro ao carregar a imobiliária:", error);
-    setConnectionLabel("ERRO DE CONEXÃO");
-    notify("Não foi possível carregar os dados: " + error.message);
-  }
-}
-
-async function login(event) {
-  event.preventDefault();
-
-  if (busy) return;
-
-  clearLoginError();
-
-  if (!configurationReady || !supabaseClient) {
-    showLoginError(
-      "Configure a URL do projeto e a Publishable key no início do script.js."
-    );
-    return;
-  }
-
-  const email = $("loginEmail").value.trim();
-  const password = $("loginPassword").value;
-
-  if (!email || !password) {
-    showLoginError("Informe seu e-mail e sua senha.");
-    return;
-  }
-
-  busy = true;
-  setLoginBusy(true);
-
-  try {
-    const { data: result, error } =
-      await supabaseClient.auth.signInWithPassword({
-        email,
-        password
-      });
-
-    if (error) throw error;
-
-    if (!result.user) {
-      throw new Error("Não foi possível identificar o usuário.");
-    }
-
-    await enterApplication(result.user);
-  } catch (error) {
-    console.error("Erro no login:", error);
-
-    showLoginError(
-      error.message === "Invalid login credentials"
-        ? "E-mail ou senha incorretos. Confira os dados e tente novamente."
-        : error.message || "Não foi possível entrar. Tente novamente."
-    );
-  } finally {
-    busy = false;
-    setLoginBusy(false);
-  }
-}
-
-async function logout() {
-  if (!supabaseClient) return;
-
-  const { error } = await supabaseClient.auth.signOut();
-
-  if (error) {
-    console.error("Erro ao sair:", error);
-    notify("Não foi possível encerrar a sessão.");
-    return;
-  }
-
-  currentUser = null;
-  currentOrg = null;
-  data = { properties: [], leads: [] };
-
-  showLogin();
-  clearLoginError();
-
-  if ($("loginPassword")) $("loginPassword").value = "";
-
-  notify("Você saiu da sua conta.");
-}
-
-/* CONVERSÃO DOS DADOS DO BANCO */
-
-function propertyFromDB(row) {
-  return {
-    id: row.id,
-    title: row.titulo || "",
-    type: row.tipo || "",
-    purpose: row.finalidade || "Venda",
-    price: Number(row.preco || 0),
-    bedrooms: Number(row.quartos || 0),
-    city: row.cidade || "",
-    neighborhood: row.bairro || "",
-    address: row.endereco || "",
-    status: row.status || "Disponível",
-    createdAt: row.created_at
-      ? new Date(row.created_at).getTime()
-      : Date.now()
-  };
-}
-
-function leadFromDB(row) {
-  return {
-    id: row.id,
-    name: row.nome || "",
-    phone: row.telefone || "",
-    email: row.email || "",
-    propertyId: row.imovel_id || "",
-    agent: row.corretor || "",
-    status: row.status || "Novo",
-    notes: row.observacoes || "",
-    createdAt: row.created_at
-      ? new Date(row.created_at).getTime()
-      : Date.now()
-  };
-}
-
-function propertyToDB(property) {
-  return {
-    imobiliaria_id: currentOrg.id,
-    titulo: property.title,
-    tipo: property.type,
-    finalidade: property.purpose,
-    preco: property.price,
-    quartos: property.bedrooms,
-    cidade: property.city,
-    bairro: property.neighborhood,
-    endereco: property.address,
-    status: property.status
-  };
-}
-
-function leadToDB(lead) {
-  return {
-    imobiliaria_id: currentOrg.id,
-    nome: lead.name,
-    telefone: lead.phone,
-    email: lead.email,
-    imovel_id: lead.propertyId || null,
-    corretor: lead.agent,
-    status: lead.status,
-    observacoes: lead.notes
-  };
-}
-
-/* CARREGAR DADOS DO SUPABASE */
+// ============================================
+// 5. CARREGAMENTO DOS DADOS
+// ============================================
 
 async function loadData() {
-  if (!currentOrg) {
-    throw new Error("A imobiliária não foi identificada.");
-  }
+  if (!currentOrganization) return;
 
-  const [propertiesResult, leadsResult] = await Promise.all([
+  const organizationId = currentOrganization.id;
+
+  const [propertyResult, leadResult, dealResult] = await Promise.all([
     supabaseClient
       .from("imoveis")
       .select("*")
-      .eq("imobiliaria_id", currentOrg.id)
+      .eq("imobiliaria_id", organizationId)
       .order("created_at", { ascending: false }),
 
     supabaseClient
       .from("interessados")
       .select("*")
-      .eq("imobiliaria_id", currentOrg.id)
+      .eq("imobiliaria_id", organizationId)
+      .order("created_at", { ascending: false }),
+
+    supabaseClient
+      .from("negociacoes")
+      .select("*")
+      .eq("imobiliaria_id", organizationId)
       .order("created_at", { ascending: false })
   ]);
 
-  if (propertiesResult.error) throw propertiesResult.error;
-  if (leadsResult.error) throw leadsResult.error;
+  if (propertyResult.error) throw propertyResult.error;
+  if (leadResult.error) throw leadResult.error;
+  if (dealResult.error) throw dealResult.error;
 
-  data.properties = (propertiesResult.data || []).map(propertyFromDB);
-  data.leads = (leadsResult.data || []).map(leadFromDB);
+  properties = propertyResult.data || [];
+  leads = leadResult.data || [];
+  deals = dealResult.data || [];
 }
 
-/* STATUS */
-
-function statusClass(status) {
-  const classes = {
-    "Disponível": "available",
-    "Reservado": "reserved",
-    "Vendido": "sold",
-    "Alugado": "sold",
-    "Novo": "",
-    "Em contato": "contact",
-    "Visita agendada": "visit",
-    "Proposta enviada": "proposal",
-    "Concluído": "done",
-    "Perdido": "lost"
-  };
-
-  return classes[status] || "";
+async function refreshData() {
+  try {
+    await loadData();
+    renderAll();
+  } catch (error) {
+    console.error("Erro ao atualizar dados:", error);
+    showToast("Erro ao atualizar os dados.", "error");
+  }
 }
 
-function statusBadge(status) {
-  return `<span class="status ${statusClass(status)}">${escapeHTML(status)}</span>`;
-}
+// ============================================
+// 6. NAVEGAÇÃO
+// ============================================
 
-/* NAVEGAÇÃO */
+function navigateTo(view) {
+  const knownViews = ["dashboard", "properties", "leads", "pipeline"];
+  if (!knownViews.includes(view)) view = "dashboard";
 
-function navigate(view) {
+  currentView = view;
+
+  $$(".view").forEach((element) => {
+    element.hidden = true;
+    element.classList.remove("active");
+  });
+
+  const viewElement = byId(`view-${view}`);
+  if (viewElement) {
+    viewElement.hidden = false;
+    viewElement.classList.add("active");
+  }
+
+  $$(".nav-item, [data-view]").forEach((element) => {
+    const active =
+      element.dataset.view === view ||
+      element.dataset.target === view;
+
+    element.classList.toggle("active", active);
+  });
+
   const titles = {
     dashboard: "Dashboard",
     properties: "Imóveis",
@@ -409,579 +414,502 @@ function navigate(view) {
     pipeline: "Negociações"
   };
 
-  if (!titles[view]) return;
+  if (byId("pageTitle")) byId("pageTitle").textContent = titles[view];
+  if (byId("breadcrumb")) byId("breadcrumb").textContent = titles[view];
 
-  document.querySelectorAll(".view").forEach(section => {
-    section.classList.toggle("active", section.id === `view-${view}`);
-  });
-
-  document.querySelectorAll(".nav-item").forEach(button => {
-    button.classList.toggle("active", button.dataset.view === view);
-  });
-
-  if ($("pageTitle")) $("pageTitle").textContent = titles[view];
-  if ($("breadcrumb")) $("breadcrumb").textContent = titles[view];
-  if ($("sidebar")) $("sidebar").classList.remove("open");
-}
-
-document.querySelectorAll("[data-view]").forEach(button => {
-  button.addEventListener("click", () => navigate(button.dataset.view));
-});
-
-document.querySelectorAll("[data-go]").forEach(button => {
-  button.addEventListener("click", () => navigate(button.dataset.go));
-});
-
-if ($("menuToggle")) {
-  $("menuToggle").addEventListener("click", () => {
-    $("sidebar").classList.toggle("open");
-  });
-}
-
-/* MODAIS */
-
-function openModal(id) {
-  if (id === "leadModal") refreshPropertyOptions();
-  $(id).classList.add("open");
-}
-
-function closeModal(id) {
-  $(id).classList.remove("open");
-}
-
-document.querySelectorAll("[data-open]").forEach(button => {
-  button.addEventListener("click", () => {
-    if (button.dataset.open === "propertyModal") resetPropertyForm();
-    if (button.dataset.open === "leadModal") resetLeadForm();
-    openModal(button.dataset.open);
-  });
-});
-
-document.querySelectorAll("[data-close]").forEach(button => {
-  button.addEventListener("click", () => closeModal(button.dataset.close));
-});
-
-document.querySelectorAll(".modal-backdrop").forEach(backdrop => {
-  backdrop.addEventListener("click", event => {
-    if (event.target === backdrop) closeModal(backdrop.id);
-  });
-});
-
-document.addEventListener("keydown", event => {
-  if (event.key === "Escape") {
-    document.querySelectorAll(".modal-backdrop.open").forEach(modal => {
-      closeModal(modal.id);
-    });
-
-    if ($("sidebar")) $("sidebar").classList.remove("open");
+  if (byId("sidebar")) {
+    byId("sidebar").classList.remove("open");
   }
-});
+}
 
-/* DASHBOARD */
+function bindNavigation() {
+  $$(".nav-item, [data-view]").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      const view = element.dataset.view || element.dataset.target;
+      if (!view) return;
+
+      event.preventDefault();
+      navigateTo(view);
+    });
+  });
+
+  byId("menuToggle")?.addEventListener("click", () => {
+    byId("sidebar")?.classList.toggle("open");
+  });
+
+  byId("logoutButton")?.addEventListener("click", handleLogout);
+}
+
+// ============================================
+// 7. DASHBOARD
+// ============================================
 
 function renderDashboard() {
-  const properties = data.properties;
-  const leads = data.leads;
+  const availableProperties = properties.filter(
+    (property) => property.status === "Disponível"
+  );
 
-  $("statProperties").textContent = properties.length;
-  $("statAvailable").textContent =
-    properties.filter(p => p.status === "Disponível").length;
-  $("statLeads").textContent = leads.length;
-  $("statDeals").textContent =
-    leads.filter(l => !["Concluído", "Perdido"].includes(l.status)).length;
+  const activeDeals = deals.filter(
+    (deal) => !["Concluído", "Perdido", "Cancelado"].includes(deal.etapa)
+  );
 
-  const recentProperties = [...properties]
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 4);
+  if (byId("statProperties")) {
+    byId("statProperties").textContent = properties.length;
+  }
 
-  $("recentProperties").innerHTML = recentProperties.length
-    ? recentProperties.map(p => `
-      <div class="recent-item">
-        <div class="recent-icon">⌂</div>
-        <div class="recent-info">
-          <strong>${escapeHTML(p.title)}</strong>
-          <small>${escapeHTML(p.city)} · ${money(p.price)}</small>
-        </div>
-        ${statusBadge(p.status)}
-      </div>
-    `).join("")
-    : `<div class="empty-state">
-        <strong>Nenhum imóvel cadastrado</strong>
-        <p>Cadastre um imóvel para começar.</p>
-      </div>`;
+  if (byId("statAvailable")) {
+    byId("statAvailable").textContent = availableProperties.length;
+  }
 
-  const recentLeads = [...leads]
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 4);
+  if (byId("statLeads")) {
+    byId("statLeads").textContent = leads.length;
+  }
 
-  $("recentLeads").innerHTML = recentLeads.length
-    ? recentLeads.map(lead => `
-      <div class="recent-item">
-        <div class="recent-icon">♙</div>
-        <div class="recent-info">
-          <strong>${escapeHTML(lead.name)}</strong>
-          <small>${escapeHTML(lead.phone || lead.email || "Sem contato informado")}</small>
-        </div>
-        ${statusBadge(lead.status)}
-      </div>
-    `).join("")
-    : `<div class="empty-state">
-        <strong>Nenhum interessado cadastrado</strong>
-        <p>Cadastre um contato para começar.</p>
-      </div>`;
+  if (byId("statDeals")) {
+    byId("statDeals").textContent = activeDeals.length;
+  }
+
+  const recentProperties = byId("recentProperties");
+
+  if (recentProperties) {
+    const latest = properties.slice(0, 5);
+
+    recentProperties.innerHTML = latest.length
+      ? latest.map((property) => `
+          <tr>
+            <td>${escapeHTML(property.titulo)}</td>
+            <td>${escapeHTML(property.cidade || "—")}</td>
+            <td>${formatMoney(property.preco)}</td>
+            <td>${escapeHTML(property.status || "Disponível")}</td>
+          </tr>
+        `).join("")
+      : `<tr><td colspan="4">Nenhum imóvel cadastrado.</td></tr>`;
+  }
+
+  const recentLeads = byId("recentLeads");
+
+  if (recentLeads) {
+    const latest = leads.slice(0, 5);
+
+    recentLeads.innerHTML = latest.length
+      ? latest.map((lead) => `
+          <tr>
+            <td>${escapeHTML(lead.nome)}</td>
+            <td>${escapeHTML(lead.interesse || "—")}</td>
+            <td>${escapeHTML(lead.status || "Novo")}</td>
+          </tr>
+        `).join("")
+      : `<tr><td colspan="3">Nenhum interessado cadastrado.</td></tr>`;
+  }
 }
 
-/* IMÓVEIS */
-
-function resetPropertyForm() {
-  $("propertyForm").reset();
-  $("propertyId").value = "";
-  $("propertyModalTitle").textContent = "Cadastrar imóvel";
-  $("propertyBedrooms").value = "2";
-  $("propertyStatus").value = "Disponível";
-}
+// ============================================
+// 8. IMÓVEIS — LISTAGEM E FILTROS
+// ============================================
 
 function renderProperties() {
-  const query = $("propertySearch").value.trim().toLowerCase();
-  const filter = $("propertyFilter").value;
+  const table = byId("propertiesTable");
+  if (!table) return;
 
-  const properties = data.properties.filter(p => {
+  const query = normalizeText(byId("propertySearch")?.value).toLowerCase();
+  const statusFilter = byId("propertyFilter")?.value || "";
+
+  const filtered = properties.filter((property) => {
     const searchable = [
-      p.id, p.title, p.type, p.city, p.neighborhood
+      property.titulo,
+      property.cidade,
+      property.bairro,
+      property.endereco,
+      property.tipo
     ].join(" ").toLowerCase();
 
-    return searchable.includes(query) && (!filter || p.status === filter);
-  }).sort((a, b) => b.createdAt - a.createdAt);
+    return searchable.includes(query) &&
+      (!statusFilter || property.status === statusFilter);
+  });
 
-  $("propertiesTable").innerHTML = properties.map(p => `
+  table.innerHTML = filtered.map((property) => `
     <tr>
       <td>
-        <span class="cell-title">${escapeHTML(p.title)}</span>
-        <span class="cell-sub">${escapeHTML(p.type)} · ${escapeHTML(p.purpose)} · ${escapeHTML(p.id)}</span>
+        <strong>${escapeHTML(property.titulo)}</strong>
+        <div class="muted">${escapeHTML(property.tipo || "Imóvel")}</div>
       </td>
+      <td>${escapeHTML(property.cidade || "—")}</td>
+      <td>${formatMoney(property.preco)}</td>
+      <td>${escapeHTML(property.finalidade || "Venda")}</td>
+      <td>${escapeHTML(property.status || "Disponível")}</td>
       <td>
-        ${escapeHTML(p.city)}
-        <span class="cell-sub">${escapeHTML(p.neighborhood || "Bairro não informado")}</span>
-      </td>
-      <td class="price">${money(p.price)}</td>
-      <td>${statusBadge(p.status)}</td>
-      <td>
-        <div class="action-group">
-          <button class="action-btn" data-edit-property="${escapeHTML(p.id)}">Editar</button>
-          <button class="action-btn delete" data-delete-property="${escapeHTML(p.id)}">Excluir</button>
-        </div>
+        <button type="button" class="table-action" data-edit-property="${property.id}">Editar</button>
+        <button type="button" class="table-action danger" data-delete-property="${property.id}">Excluir</button>
       </td>
     </tr>
   `).join("");
 
-  $("propertiesEmpty").hidden = properties.length !== 0;
+  setHidden(byId("propertiesEmpty"), filtered.length > 0);
+
+  table.querySelectorAll("[data-edit-property]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const property = properties.find(
+        (item) => item.id === button.dataset.editProperty
+      );
+      if (property) openPropertyForm(property);
+    });
+  });
+
+  table.querySelectorAll("[data-delete-property]").forEach((button) => {
+    button.addEventListener("click", () => {
+      deleteProperty(button.dataset.deleteProperty);
+    });
+  });
 }
 
-$("propertySearch").addEventListener("input", renderProperties);
-$("propertyFilter").addEventListener("change", renderProperties);
-
-$("propertyForm").addEventListener("submit", async event => {
-  event.preventDefault();
-  if (busy || !currentOrg) return;
-
-  const id = $("propertyId").value;
-  const existing = data.properties.find(p => p.id === id);
-
-  const property = {
-    id,
-    title: $("propertyTitle").value.trim(),
-    type: $("propertyType").value,
-    purpose: $("propertyPurpose").value,
-    price: Number($("propertyPrice").value),
-    bedrooms: Number($("propertyBedrooms").value || 0),
-    city: $("propertyCity").value.trim(),
-    neighborhood: $("propertyNeighborhood").value.trim(),
-    address: $("propertyAddress").value.trim(),
-    status: $("propertyStatus").value,
-    createdAt: existing ? existing.createdAt : Date.now()
-  };
-
-  if (
-    !property.title ||
-    !property.city ||
-    !Number.isFinite(property.price) ||
-    property.price < 0
-  ) {
-    notify("Confira os dados do imóvel.");
+function openPropertyForm(property = null) {
+  const form = byId("propertyForm");
+  if (!form) {
+    showToast("Formulário de imóvel não encontrado no index.html.", "error");
     return;
   }
 
-  busy = true;
+  form.reset();
+
+  const values = {
+    propertyId: property?.id || "",
+    propertyTitle: property?.titulo || "",
+    propertyType: property?.tipo || "",
+    propertyPurpose: property?.finalidade || "Venda",
+    propertyPrice: property?.preco ?? "",
+    propertyBedrooms: property?.quartos ?? 0,
+    propertyCity: property?.cidade || "",
+    propertyNeighborhood: property?.bairro || "",
+    propertyAddress: property?.endereco || "",
+    propertyStatus: property?.status || "Disponível"
+  };
+
+  Object.entries(values).forEach(([id, value]) => {
+    if (byId(id)) byId(id).value = value;
+  });
+
+  if (byId("propertyModalTitle")) {
+    byId("propertyModalTitle").textContent =
+      property ? "Editar imóvel" : "Novo imóvel";
+  }
+
+  openModal("propertyModal");
+}
+
+async function saveProperty(event) {
+  event.preventDefault();
+  if (isSaving || !currentOrganization) return;
+
+  const id = byId("propertyId")?.value || "";
+
+  const payload = {
+    imobiliaria_id: currentOrganization.id,
+    titulo: normalizeText(byId("propertyTitle")?.value),
+    tipo: normalizeText(byId("propertyType")?.value),
+    finalidade: byId("propertyPurpose")?.value || "Venda",
+    preco: Number(byId("propertyPrice")?.value || 0),
+    quartos: Number(byId("propertyBedrooms")?.value || 0),
+    cidade: normalizeText(byId("propertyCity")?.value),
+    bairro: normalizeText(byId("propertyNeighborhood")?.value),
+    endereco: normalizeText(byId("propertyAddress")?.value),
+    status: byId("propertyStatus")?.value || "Disponível"
+  };
+
+  if (!payload.titulo) {
+    showToast("Informe o título do imóvel.", "error");
+    return;
+  }
+
+  isSaving = true;
 
   try {
-    let result;
+    const request = id
+      ? supabaseClient.from("imoveis").update(payload).eq("id", id)
+      : supabaseClient.from("imoveis").insert(payload);
 
-    if (existing) {
-      result = await supabaseClient
-        .from("imoveis")
-        .update(propertyToDB(property))
-        .eq("id", id)
-        .eq("imobiliaria_id", currentOrg.id)
-        .select("*")
-        .single();
-    } else {
-      result = await supabaseClient
-        .from("imoveis")
-        .insert(propertyToDB(property))
-        .select("*")
-        .single();
-    }
-
-    if (result.error) throw result.error;
-
-    const saved = propertyFromDB(result.data);
-
-    if (existing) {
-      data.properties = data.properties.map(p => p.id === id ? saved : p);
-    } else {
-      data.properties.unshift(saved);
-    }
+    const { error } = await request;
+    if (error) throw error;
 
     closeModal("propertyModal");
-    resetPropertyForm();
-    renderAll();
-    notify(existing ? "Imóvel atualizado!" : "Imóvel cadastrado!");
+    await refreshData();
+    showToast(id ? "Imóvel atualizado!" : "Imóvel cadastrado!");
   } catch (error) {
-    console.error(error);
-    notify("Erro ao salvar imóvel: " + error.message);
+    console.error("Erro ao salvar imóvel:", error);
+    showToast("Não foi possível salvar o imóvel: " + error.message, "error");
   } finally {
-    busy = false;
+    isSaving = false;
   }
-});
-
-$("propertiesTable").addEventListener("click", async event => {
-  const editButton = event.target.closest("[data-edit-property]");
-  const deleteButton = event.target.closest("[data-delete-property]");
-
-  if (editButton) {
-    const p = data.properties.find(x => x.id === editButton.dataset.editProperty);
-    if (!p) return;
-
-    $("propertyId").value = p.id;
-    $("propertyTitle").value = p.title;
-    $("propertyType").value = p.type;
-    $("propertyPurpose").value = p.purpose;
-    $("propertyPrice").value = p.price;
-    $("propertyBedrooms").value = p.bedrooms;
-    $("propertyCity").value = p.city;
-    $("propertyNeighborhood").value = p.neighborhood;
-    $("propertyAddress").value = p.address;
-    $("propertyStatus").value = p.status;
-    $("propertyModalTitle").textContent = "Editar imóvel";
-
-    openModal("propertyModal");
-    return;
-  }
-
-  if (deleteButton) {
-    if (busy || !currentOrg) return;
-
-    const id = deleteButton.dataset.deleteProperty;
-    const p = data.properties.find(x => x.id === id);
-    if (!p) return;
-
-    if (!confirm(`Excluir "${p.title}"? Os interessados associados não serão excluídos.`)) return;
-
-    busy = true;
-
-    try {
-      const { data: deleted, error } = await supabaseClient
-        .from("imoveis")
-        .delete()
-        .eq("id", id)
-        .eq("imobiliaria_id", currentOrg.id)
-        .select("id");
-
-      if (error) throw error;
-      if (!deleted?.length) {
-        throw new Error("Nenhum imóvel foi excluído. Verifique as permissões.");
-      }
-
-      data.properties = data.properties.filter(x => x.id !== id);
-      data.leads = data.leads.map(lead =>
-        lead.propertyId === id ? { ...lead, propertyId: "" } : lead
-      );
-
-      renderAll();
-      notify("Imóvel excluído.");
-    } catch (error) {
-      console.error(error);
-      notify("Erro ao excluir imóvel: " + error.message);
-    } finally {
-      busy = false;
-    }
-  }
-});
-
-/* INTERESSADOS */
-
-function refreshPropertyOptions(selectedId = "") {
-  const options = data.properties.map(p => `
-    <option value="${escapeHTML(p.id)}" ${p.id === selectedId ? "selected" : ""}>
-      ${escapeHTML(p.title)} — ${escapeHTML(p.city)}
-    </option>
-  `).join("");
-
-  $("leadProperty").innerHTML =
-    `<option value="">Ainda não definido</option>${options}`;
 }
 
-function resetLeadForm() {
-  $("leadForm").reset();
-  $("leadId").value = "";
-  $("leadModalTitle").textContent = "Novo interessado";
-  $("leadStatus").value = "Novo";
-  refreshPropertyOptions();
+async function deleteProperty(id) {
+  if (!confirm("Deseja realmente excluir este imóvel?")) return;
+
+  try {
+    const { error } = await supabaseClient
+      .from("imoveis")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+
+    await refreshData();
+    showToast("Imóvel excluído.");
+  } catch (error) {
+    console.error("Erro ao excluir imóvel:", error);
+    showToast("Não foi possível excluir o imóvel: " + error.message, "error");
+  }
 }
 
-function propertyName(id) {
-  const p = data.properties.find(item => item.id === id);
-  return p ? p.title : "Não definido";
-}
+// ============================================
+// 9. INTERESSADOS — LISTAGEM E FILTROS
+// ============================================
 
 function renderLeads() {
-  const query = $("leadSearch").value.trim().toLowerCase();
-  const filter = $("leadFilter").value;
+  const table = byId("leadsTable");
+  if (!table) return;
 
-  const leads = data.leads.filter(lead => {
+  const query = normalizeText(byId("leadSearch")?.value).toLowerCase();
+  const statusFilter = byId("leadFilter")?.value || "";
+
+  const filtered = leads.filter((lead) => {
     const searchable = [
-      lead.name,
-      lead.phone,
+      lead.nome,
+      lead.telefone,
       lead.email,
-      lead.agent,
-      propertyName(lead.propertyId)
+      lead.interesse,
+      lead.corretor
     ].join(" ").toLowerCase();
 
-    return searchable.includes(query) && (!filter || lead.status === filter);
-  }).sort((a, b) => b.createdAt - a.createdAt);
+    return searchable.includes(query) &&
+      (!statusFilter || lead.status === statusFilter);
+  });
 
-  $("leadsTable").innerHTML = leads.map(lead => `
+  table.innerHTML = filtered.map((lead) => `
     <tr>
       <td>
-        <span class="cell-title">${escapeHTML(lead.name)}</span>
-        <span class="cell-sub">Responsável: ${escapeHTML(lead.agent || "Não definido")}</span>
+        <strong>${escapeHTML(lead.nome)}</strong>
+        <div class="muted">${escapeHTML(lead.email || "")}</div>
       </td>
+      <td>${escapeHTML(lead.telefone || "—")}</td>
+      <td>${escapeHTML(lead.interesse || "—")}</td>
+      <td>${escapeHTML(lead.status || "Novo")}</td>
+      <td>${escapeHTML(lead.corretor || "—")}</td>
       <td>
-        ${escapeHTML(lead.phone || "Sem telefone")}
-        <span class="cell-sub">${escapeHTML(lead.email || "Sem e-mail")}</span>
-      </td>
-      <td>${escapeHTML(propertyName(lead.propertyId))}</td>
-      <td>${statusBadge(lead.status)}</td>
-      <td>
-        <div class="action-group">
-          <button class="action-btn" data-edit-lead="${escapeHTML(lead.id)}">Editar</button>
-          <button class="action-btn delete" data-delete-lead="${escapeHTML(lead.id)}">Excluir</button>
-        </div>
+        <button type="button" class="table-action" data-edit-lead="${lead.id}">Editar</button>
+        <button type="button" class="table-action danger" data-delete-lead="${lead.id}">Excluir</button>
       </td>
     </tr>
   `).join("");
 
-  $("leadsEmpty").hidden = leads.length !== 0;
+  setHidden(byId("leadsEmpty"), filtered.length > 0);
+
+  table.querySelectorAll("[data-edit-lead]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const lead = leads.find((item) => item.id === button.dataset.editLead);
+      if (lead) openLeadForm(lead);
+    });
+  });
+
+  table.querySelectorAll("[data-delete-lead]").forEach((button) => {
+    button.addEventListener("click", () => {
+      deleteLead(button.dataset.deleteLead);
+    });
+  });
 }
 
-$("leadSearch").addEventListener("input", renderLeads);
-$("leadFilter").addEventListener("change", renderLeads);
+function openLeadForm(lead = null) {
+  const form = byId("leadForm");
+  if (!form) {
+    showToast("Formulário de interessado não encontrado no index.html.", "error");
+    return;
+  }
 
-$("leadForm").addEventListener("submit", async event => {
-  event.preventDefault();
-  if (busy || !currentOrg) return;
+  form.reset();
 
-  const id = $("leadId").value;
-  const existing = data.leads.find(lead => lead.id === id);
-
-  const lead = {
-    id,
-    name: $("leadName").value.trim(),
-    phone: $("leadPhone").value.trim(),
-    email: $("leadEmail").value.trim(),
-    propertyId: $("leadProperty").value,
-    agent: $("leadAgent").value.trim(),
-    status: $("leadStatus").value,
-    notes: $("leadNotes").value.trim(),
-    createdAt: existing ? existing.createdAt : Date.now()
+  const values = {
+    leadId: lead?.id || "",
+    leadName: lead?.nome || "",
+    leadPhone: lead?.telefone || "",
+    leadEmail: lead?.email || "",
+    leadProperty: lead?.interesse || "",
+    leadAgent: lead?.corretor || "",
+    leadStatus: lead?.status || "Novo",
+    leadNotes: lead?.observacoes || ""
   };
 
-  if (!lead.name) {
-    notify("Informe o nome do interessado.");
-    return;
+  Object.entries(values).forEach(([id, value]) => {
+    if (byId(id)) byId(id).value = value;
+  });
+
+  if (byId("leadModalTitle")) {
+    byId("leadModalTitle").textContent =
+      lead ? "Editar interessado" : "Novo interessado";
   }
 
-  busy = true;
-
-  try {
-    let result;
-
-    if (existing) {
-      result = await supabaseClient
-        .from("interessados")
-        .update(leadToDB(lead))
-        .eq("id", id)
-        .eq("imobiliaria_id", currentOrg.id)
-        .select("*")
-        .single();
-    } else {
-      result = await supabaseClient
-        .from("interessados")
-        .insert(leadToDB(lead))
-        .select("*")
-        .single();
-    }
-
-    if (result.error) throw result.error;
-
-    const saved = leadFromDB(result.data);
-
-    if (existing) {
-      data.leads = data.leads.map(item => item.id === id ? saved : item);
-    } else {
-      data.leads.unshift(saved);
-    }
-
-    closeModal("leadModal");
-    resetLeadForm();
-    renderAll();
-    notify(existing ? "Interessado atualizado!" : "Interessado cadastrado!");
-  } catch (error) {
-    console.error(error);
-    notify("Erro ao salvar interessado: " + error.message);
-  } finally {
-    busy = false;
-  }
-});
-
-$("leadsTable").addEventListener("click", async event => {
-  const editButton = event.target.closest("[data-edit-lead]");
-  const deleteButton = event.target.closest("[data-delete-lead]");
-
-  if (editButton) {
-    const lead = data.leads.find(x => x.id === editButton.dataset.editLead);
-    if (!lead) return;
-
-    $("leadId").value = lead.id;
-    $("leadName").value = lead.name;
-    $("leadPhone").value = lead.phone;
-    $("leadEmail").value = lead.email;
-    $("leadAgent").value = lead.agent;
-    $("leadStatus").value = lead.status;
-    $("leadNotes").value = lead.notes;
-    $("leadModalTitle").textContent = "Editar interessado";
-    refreshPropertyOptions(lead.propertyId);
-
-    openModal("leadModal");
-    return;
-  }
-
-  if (deleteButton) {
-    if (busy || !currentOrg) return;
-
-    const id = deleteButton.dataset.deleteLead;
-    const lead = data.leads.find(x => x.id === id);
-    if (!lead) return;
-
-    if (!confirm(`Excluir o cadastro de "${lead.name}"?`)) return;
-
-    busy = true;
-
-    try {
-      const { data: deleted, error } = await supabaseClient
-        .from("interessados")
-        .delete()
-        .eq("id", id)
-        .eq("imobiliaria_id", currentOrg.id)
-        .select("id");
-
-      if (error) throw error;
-      if (!deleted?.length) {
-        throw new Error("Nenhum interessado foi excluído. Verifique as permissões.");
-      }
-
-      data.leads = data.leads.filter(x => x.id !== id);
-      renderAll();
-      notify("Interessado excluído.");
-    } catch (error) {
-      console.error(error);
-      notify("Erro ao excluir interessado: " + error.message);
-    } finally {
-      busy = false;
-    }
-  }
-});
-
-/* FUNIL COMERCIAL */
-
-function renderPipeline() {
-  const board = $("pipelineBoard");
-
-  board.innerHTML = stages.map(stage => {
-    const leads = data.leads.filter(lead => lead.status === stage);
-
-    return `
-      <section class="pipeline-column">
-        <div class="pipeline-column-head">
-          <span>${escapeHTML(stage)}</span>
-          <span class="pipeline-count">${leads.length}</span>
-        </div>
-
-        ${leads.length ? leads.map(lead => `
-          <article class="pipeline-card">
-            <strong>${escapeHTML(lead.name)}</strong>
-            <p>${escapeHTML(propertyName(lead.propertyId))}</p>
-            <select data-stage-lead="${escapeHTML(lead.id)}"
-              aria-label="Alterar etapa de ${escapeHTML(lead.name)}">
-              ${stages.map(option => `
-                <option value="${escapeHTML(option)}"
-                  ${option === lead.status ? "selected" : ""}>
-                  ${escapeHTML(option)}
-                </option>
-              `).join("")}
-            </select>
-          </article>
-        `).join("") : `<div class="pipeline-empty">Nenhum interessado</div>`}
-      </section>
-    `;
-  }).join("");
+  openModal("leadModal");
 }
 
-$("pipelineBoard").addEventListener("change", async event => {
-  const select = event.target.closest("[data-stage-lead]");
-  if (!select || busy || !currentOrg) return;
+async function saveLead(event) {
+  event.preventDefault();
+  if (isSaving || !currentOrganization) return;
 
-  const lead = data.leads.find(x => x.id === select.dataset.stageLead);
-  if (!lead || !stages.includes(select.value)) return;
+  const id = byId("leadId")?.value || "";
 
-  const oldStatus = lead.status;
-  const newStatus = select.value;
+  const payload = {
+    imobiliaria_id: currentOrganization.id,
+    nome: normalizeText(byId("leadName")?.value),
+    telefone: normalizeText(byId("leadPhone")?.value),
+    email: normalizeText(byId("leadEmail")?.value),
+    interesse: normalizeText(byId("leadProperty")?.value),
+    corretor: normalizeText(byId("leadAgent")?.value),
+    status: byId("leadStatus")?.value || "Novo",
+    observacoes: normalizeText(byId("leadNotes")?.value)
+  };
 
-  busy = true;
+  if (!payload.nome) {
+    showToast("Informe o nome do interessado.", "error");
+    return;
+  }
+
+  isSaving = true;
+
+  try {
+    const request = id
+      ? supabaseClient.from("interessados").update(payload).eq("id", id)
+      : supabaseClient.from("interessados").insert(payload);
+
+    const { error } = await request;
+    if (error) throw error;
+
+    closeModal("leadModal");
+    await refreshData();
+    showToast(id ? "Interessado atualizado!" : "Interessado cadastrado!");
+  } catch (error) {
+    console.error("Erro ao salvar interessado:", error);
+    showToast("Não foi possível salvar o interessado: " + error.message, "error");
+  } finally {
+    isSaving = false;
+  }
+}
+
+async function deleteLead(id) {
+  if (!confirm("Deseja realmente excluir este interessado?")) return;
 
   try {
     const { error } = await supabaseClient
       .from("interessados")
-      .update({ status: newStatus })
-      .eq("id", lead.id)
-      .eq("imobiliaria_id", currentOrg.id);
+      .delete()
+      .eq("id", id);
 
     if (error) throw error;
 
-    lead.status = newStatus;
-    renderAll();
-    notify("Etapa comercial atualizada.");
+    await refreshData();
+    showToast("Interessado excluído.");
   } catch (error) {
-    console.error(error);
-    lead.status = oldStatus;
-    renderAll();
-    notify("Erro ao atualizar a etapa: " + error.message);
-  } finally {
-    busy = false;
+    console.error("Erro ao excluir interessado:", error);
+    showToast("Não foi possível excluir o interessado: " + error.message, "error");
   }
-});
+}
 
-/* ATUALIZAÇÃO GERAL */
+// ============================================
+// 10. NEGOCIAÇÕES — QUADRO
+// ============================================
+
+function renderPipeline() {
+  const board = byId("pipelineBoard");
+  if (!board) return;
+
+  const stages = ["Novo", "Contato", "Visita", "Proposta", "Concluído"];
+
+  board.innerHTML = stages.map((stage) => {
+    const stageDeals = deals.filter((deal) => deal.etapa === stage);
+
+    return `
+      <section class="pipeline-column">
+        <header class="pipeline-column-header">
+          <strong>${escapeHTML(stage)}</strong>
+          <span>${stageDeals.length}</span>
+        </header>
+        <div class="pipeline-cards">
+          ${stageDeals.map((deal) => {
+            const lead = leads.find((item) => item.id === deal.interessado_id);
+            const property = properties.find((item) => item.id === deal.imovel_id);
+
+            return `
+              <article class="pipeline-card">
+                <strong>${escapeHTML(deal.titulo)}</strong>
+                <p>${escapeHTML(lead?.nome || "Sem interessado vinculado")}</p>
+                <p>${escapeHTML(property?.titulo || "Sem imóvel vinculado")}</p>
+                <strong>${formatMoney(deal.valor)}</strong>
+                <div class="pipeline-actions">
+                  <select data-deal-stage="${deal.id}" aria-label="Alterar etapa">
+                    ${stages.map((option) => `
+                      <option value="${escapeHTML(option)}" ${option === deal.etapa ? "selected" : ""}>
+                        ${escapeHTML(option)}
+                      </option>
+                    `).join("")}
+                    <option value="Perdido" ${deal.etapa === "Perdido" ? "selected" : ""}>Perdido</option>
+                  </select>
+                  <button type="button" class="table-action danger" data-delete-deal="${deal.id}">Excluir</button>
+                </div>
+              </article>
+            `;
+          }).join("") || `<p class="muted">Nenhuma negociação.</p>`}
+        </div>
+      </section>
+    `;
+  }).join("");
+
+  board.querySelectorAll("[data-deal-stage]").forEach((select) => {
+    select.addEventListener("change", async () => {
+      await updateDealStage(select.dataset.dealStage, select.value);
+    });
+  });
+
+  board.querySelectorAll("[data-delete-deal]").forEach((button) => {
+    button.addEventListener("click", () => deleteDeal(button.dataset.deleteDeal));
+  });
+}
+
+async function updateDealStage(id, stage) {
+  try {
+    const { error } = await supabaseClient
+      .from("negociacoes")
+      .update({ etapa: stage })
+      .eq("id", id);
+
+    if (error) throw error;
+
+    await refreshData();
+    showToast("Etapa da negociação atualizada.");
+  } catch (error) {
+    console.error("Erro ao atualizar negociação:", error);
+    showToast("Não foi possível atualizar a negociação.", "error");
+  }
+}
+
+async function deleteDeal(id) {
+  if (!confirm("Deseja excluir esta negociação?")) return;
+
+  try {
+    const { error } = await supabaseClient
+      .from("negociacoes")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+
+    await refreshData();
+    showToast("Negociação excluída.");
+  } catch (error) {
+    console.error("Erro ao excluir negociação:", error);
+    showToast("Não foi possível excluir a negociação.", "error");
+  }
+}
+
+// ============================================
+// 11. RENDERIZAÇÃO GERAL
+// ============================================
 
 function renderAll() {
   renderDashboard();
@@ -990,39 +918,82 @@ function renderAll() {
   renderPipeline();
 }
 
-/* INICIALIZAÇÃO */
+// ============================================
+// 12. EVENTOS DOS FORMULÁRIOS E BOTÕES
+// ============================================
+
+function bindForms() {
+  byId("loginForm")?.addEventListener("submit", handleLogin);
+  byId("propertyForm")?.addEventListener("submit", saveProperty);
+  byId("leadForm")?.addEventListener("submit", saveLead);
+
+  byId("propertySearch")?.addEventListener("input", renderProperties);
+  byId("propertyFilter")?.addEventListener("change", renderProperties);
+  byId("leadSearch")?.addEventListener("input", renderLeads);
+  byId("leadFilter")?.addEventListener("change", renderLeads);
+
+  // Botões que podem existir no index.html.
+  byId("addPropertyButton")?.addEventListener("click", () => openPropertyForm());
+  byId("newPropertyButton")?.addEventListener("click", () => openPropertyForm());
+  byId("addLeadButton")?.addEventListener("click", () => openLeadForm());
+  byId("newLeadButton")?.addEventListener("click", () => openLeadForm());
+
+  // Botões de fechar modal.
+  $$("[data-close-modal]").forEach((button) => {
+    button.addEventListener("click", () => {
+      closeModal(button.dataset.closeModal);
+    });
+  });
+
+  $$(".modal-close").forEach((button) => {
+    button.addEventListener("click", () => {
+      const modal = button.closest(".modal");
+      if (modal?.id) closeModal(modal.id);
+    });
+  });
+}
+
+// ============================================
+// 13. INICIALIZAÇÃO DO APP
+// ============================================
 
 async function initialize() {
-  if ($("loginForm")) {
-    $("loginForm").addEventListener("submit", login);
-  }
-
-  if ($("logoutButton")) {
-    $("logoutButton").addEventListener("click", logout);
-  }
-
-  if (!configurationReady || !supabaseClient) {
-    showLogin();
-    showLoginError(
-      "Falta configurar a URL do Supabase e a Publishable key no início do script.js."
-    );
-    return;
-  }
-
-  showLogin();
+  bindNavigation();
+  bindForms();
 
   try {
-    const { data: result, error } = await supabaseClient.auth.getSession();
+    initializeSupabase();
 
+    const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
 
-    if (result.session?.user) {
-      await enterApplication(result.session.user);
+    if (data?.session?.user) {
+      currentUser = data.session.user;
+      await enterApplication();
+    } else {
+      showLogin();
+      setConnectionLabel("Desconectado");
     }
+
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        currentUser = null;
+        currentOrganization = null;
+        showLogin();
+      } else if (session?.user && !currentUser) {
+        currentUser = session.user;
+        setTimeout(() => enterApplication(), 0);
+      }
+    });
   } catch (error) {
-    console.error("Erro ao recuperar a sessão:", error);
-    showLoginError("Não foi possível conectar ao Supabase. Confira a configuração.");
+    console.error("Erro na inicialização:", error);
+    showLogin();
+    setConnectionLabel("Erro de conexão");
+
+    setLoginError(
+      "Erro ao iniciar o sistema: " + (error?.message || "verifique a configuração.")
+    );
   }
 }
 
-initialize();
+document.addEventListener("DOMContentLoaded", initialize);
