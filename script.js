@@ -7,7 +7,7 @@
   Nunca coloque uma service_role ou secret key no site.
 */
 
-const SUPABASE_URL = "https://anemrbmvjrujlwqmannf.supabase.co/rest/v1/";
+const SUPABASE_URL = "https://anemrbmvjrujlwqmannf.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_N4LE8d32FUxvduzrV1vbNw_TAOazd_e";
 
 const STORAGE_KEY = "marksImob_demo_v1";
