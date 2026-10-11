@@ -1,4 +1,14 @@
+
 "use strict";
+
+/*
+  MARKS IMOB — SUPABASE
+  Cole a URL do projeto e a Publishable key abaixo.
+  Nunca coloque uma service_role ou secret key no site.
+*/
+
+const SUPABASE_URL = "https://anemrbmvjrujlwqmannf.supabase.co/rest/v1/";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_N4LE8d32FUxvduzrV1vbNw_TAOazd_e";
 
 const STORAGE_KEY = "marksImob_demo_v1";
 
@@ -13,81 +23,28 @@ const stages = [
 
 const $ = id => document.getElementById(id);
 
-function readData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.properties) &&
-          Array.isArray(parsed.leads)) return parsed;
-    }
-  } catch (error) {
-    console.error("Erro ao ler os dados:", error);
-  }
+let supabaseClient = null;
+let currentUser = null;
+let currentOrg = null;
+let data = { properties: [], leads: [] };
+let toastTimer = null;
+let busy = false;
 
-  return {
-    properties: [
-      {
-        id: "P1001",
-        title: "Apartamento residencial",
-        type: "Apartamento",
-        purpose: "Venda",
-        price: 285000,
-        bedrooms: 2,
-        city: "São Paulo",
-        neighborhood: "Centro",
-        address: "",
-        status: "Disponível",
-        createdAt: Date.now() - 2000
-      },
-      {
-        id: "P1002",
-        title: "Casa com quintal",
-        type: "Casa",
-        purpose: "Venda",
-        price: 420000,
-        bedrooms: 3,
-        city: "Campinas",
-        neighborhood: "Jardim América",
-        address: "",
-        status: "Reservado",
-        createdAt: Date.now() - 1000
-      }
-    ],
-    leads: [
-      {
-        id: "L1001",
-        name: "Cliente demonstrativo",
-        phone: "",
-        email: "",
-        propertyId: "P1001",
-        agent: "Corretor demonstrativo",
-        status: "Em contato",
-        notes: "",
-        createdAt: Date.now()
-      }
-    ]
-  };
+const configurationReady =
+  SUPABASE_URL.startsWith("https://") &&
+  SUPABASE_URL.includes(".supabase.co") &&
+  SUPABASE_PUBLISHABLE_KEY.startsWith("sb_publishable_") &&
+  !SUPABASE_URL.includes("COLE_AQUI") &&
+  !SUPABASE_PUBLISHABLE_KEY.includes("COLE_AQUI");
+
+if (configurationReady && window.supabase?.createClient) {
+  supabaseClient = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY
+  );
 }
 
-let data = readData();
-let toastTimer;
-
-function saveData() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    return true;
-  } catch (error) {
-    console.error("Não foi possível salvar:", error);
-    notify("Não foi possível salvar. Verifique o armazenamento do navegador.");
-    return false;
-  }
-}
-
-function makeId(prefix) {
-  return prefix + Date.now().toString(36) +
-    Math.random().toString(36).slice(2, 7);
-}
+/* UTILITÁRIOS */
 
 function escapeHTML(value) {
   return String(value ?? "").replace(/[&<>"']/g, char => ({
@@ -114,6 +71,11 @@ function shortDate(value) {
 
 function notify(message) {
   const toast = $("toast");
+  if (!toast) {
+    console.log(message);
+    return;
+  }
+
   toast.textContent = message;
   toast.classList.add("show");
 
@@ -122,6 +84,299 @@ function notify(message) {
     toast.classList.remove("show");
   }, 2800);
 }
+
+function showLoginError(message) {
+  const error = $("loginError");
+  if (!error) {
+    alert(message);
+    return;
+  }
+
+  error.textContent = message;
+  error.hidden = false;
+}
+
+function clearLoginError() {
+  const error = $("loginError");
+  if (error) {
+    error.textContent = "";
+    error.hidden = true;
+  }
+}
+
+function setConnectionLabel(message) {
+  const label = $("connectionLabel");
+  if (label) label.textContent = message;
+}
+
+function setLoginBusy(value) {
+  const button = $("loginButton");
+  if (!button) return;
+
+  button.disabled = value;
+  button.textContent = value ? "Entrando..." : "Entrar na plataforma";
+}
+
+/* SESSÃO E LOGIN */
+
+function showLogin() {
+  const login = $("loginScreen");
+  const app = $("app");
+
+  if (login) login.hidden = false;
+  if (app) app.hidden = true;
+
+  setConnectionLabel("DESCONECTADO");
+}
+
+function showApp() {
+  const login = $("loginScreen");
+  const app = $("app");
+
+  if (login) login.hidden = true;
+  if (app) app.hidden = false;
+
+  const email = currentUser?.email || "Usuário";
+  const name = email.split("@")[0] || "Usuário";
+
+  if ($("profileName")) $("profileName").textContent = name;
+  if ($("profileEmail")) $("profileEmail").textContent = email;
+  if ($("profileAvatar")) {
+    $("profileAvatar").textContent = name.charAt(0).toUpperCase();
+  }
+
+  setConnectionLabel("CONECTADO");
+}
+
+/*
+  Cada usuário terá uma imobiliária própria.
+  As políticas RLS do Supabase também protegem os dados.
+*/
+
+async function getOrCreateOrganization(user) {
+  const { data: existing, error: searchError } = await supabaseClient
+    .from("imobiliarias")
+    .select("*")
+    .eq("owner_id", user.id)
+    .maybeSingle();
+
+  if (searchError) throw searchError;
+  if (existing) return existing;
+
+  const suggestedName = user.email
+    ? user.email.split("@")[0]
+    : "Minha imobiliária";
+
+  const { data: created, error: createError } = await supabaseClient
+    .from("imobiliarias")
+    .insert({
+      owner_id: user.id,
+      nome: suggestedName
+    })
+    .select("*")
+    .single();
+
+  if (!createError) return created;
+
+  // Se a imobiliária já tiver sido criada em outra tentativa,
+  // tenta localizar o registro novamente.
+  const { data: retry, error: retryError } = await supabaseClient
+    .from("imobiliarias")
+    .select("*")
+    .eq("owner_id", user.id)
+    .maybeSingle();
+
+  if (!retryError && retry) return retry;
+
+  throw createError;
+}
+
+async function enterApplication(user) {
+  currentUser = user;
+  showApp();
+  setConnectionLabel("CARREGANDO...");
+
+  try {
+    currentOrg = await getOrCreateOrganization(user);
+    await loadData();
+    renderAll();
+    setConnectionLabel("CONECTADO");
+  } catch (error) {
+    console.error("Erro ao carregar a imobiliária:", error);
+    setConnectionLabel("ERRO DE CONEXÃO");
+    notify("Não foi possível carregar os dados: " + error.message);
+  }
+}
+
+async function login(event) {
+  event.preventDefault();
+
+  if (busy) return;
+
+  clearLoginError();
+
+  if (!configurationReady || !supabaseClient) {
+    showLoginError(
+      "Configure a URL do projeto e a Publishable key no início do script.js."
+    );
+    return;
+  }
+
+  const email = $("loginEmail").value.trim();
+  const password = $("loginPassword").value;
+
+  if (!email || !password) {
+    showLoginError("Informe seu e-mail e sua senha.");
+    return;
+  }
+
+  busy = true;
+  setLoginBusy(true);
+
+  try {
+    const { data: result, error } =
+      await supabaseClient.auth.signInWithPassword({
+        email,
+        password
+      });
+
+    if (error) throw error;
+
+    if (!result.user) {
+      throw new Error("Não foi possível identificar o usuário.");
+    }
+
+    await enterApplication(result.user);
+  } catch (error) {
+    console.error("Erro no login:", error);
+
+    showLoginError(
+      error.message === "Invalid login credentials"
+        ? "E-mail ou senha incorretos. Confira os dados e tente novamente."
+        : error.message || "Não foi possível entrar. Tente novamente."
+    );
+  } finally {
+    busy = false;
+    setLoginBusy(false);
+  }
+}
+
+async function logout() {
+  if (!supabaseClient) return;
+
+  const { error } = await supabaseClient.auth.signOut();
+
+  if (error) {
+    console.error("Erro ao sair:", error);
+    notify("Não foi possível encerrar a sessão.");
+    return;
+  }
+
+  currentUser = null;
+  currentOrg = null;
+  data = { properties: [], leads: [] };
+
+  showLogin();
+  clearLoginError();
+
+  if ($("loginPassword")) $("loginPassword").value = "";
+
+  notify("Você saiu da sua conta.");
+}
+
+/* CONVERSÃO DOS DADOS DO BANCO */
+
+function propertyFromDB(row) {
+  return {
+    id: row.id,
+    title: row.titulo || "",
+    type: row.tipo || "",
+    purpose: row.finalidade || "Venda",
+    price: Number(row.preco || 0),
+    bedrooms: Number(row.quartos || 0),
+    city: row.cidade || "",
+    neighborhood: row.bairro || "",
+    address: row.endereco || "",
+    status: row.status || "Disponível",
+    createdAt: row.created_at
+      ? new Date(row.created_at).getTime()
+      : Date.now()
+  };
+}
+
+function leadFromDB(row) {
+  return {
+    id: row.id,
+    name: row.nome || "",
+    phone: row.telefone || "",
+    email: row.email || "",
+    propertyId: row.imovel_id || "",
+    agent: row.corretor || "",
+    status: row.status || "Novo",
+    notes: row.observacoes || "",
+    createdAt: row.created_at
+      ? new Date(row.created_at).getTime()
+      : Date.now()
+  };
+}
+
+function propertyToDB(property) {
+  return {
+    imobiliaria_id: currentOrg.id,
+    titulo: property.title,
+    tipo: property.type,
+    finalidade: property.purpose,
+    preco: property.price,
+    quartos: property.bedrooms,
+    cidade: property.city,
+    bairro: property.neighborhood,
+    endereco: property.address,
+    status: property.status
+  };
+}
+
+function leadToDB(lead) {
+  return {
+    imobiliaria_id: currentOrg.id,
+    nome: lead.name,
+    telefone: lead.phone,
+    email: lead.email,
+    imovel_id: lead.propertyId || null,
+    corretor: lead.agent,
+    status: lead.status,
+    observacoes: lead.notes
+  };
+}
+
+/* CARREGAR DADOS DO SUPABASE */
+
+async function loadData() {
+  if (!currentOrg) {
+    throw new Error("A imobiliária não foi identificada.");
+  }
+
+  const [propertiesResult, leadsResult] = await Promise.all([
+    supabaseClient
+      .from("imoveis")
+      .select("*")
+      .eq("imobiliaria_id", currentOrg.id)
+      .order("created_at", { ascending: false }),
+
+    supabaseClient
+      .from("interessados")
+      .select("*")
+      .eq("imobiliaria_id", currentOrg.id)
+      .order("created_at", { ascending: false })
+  ]);
+
+  if (propertiesResult.error) throw propertiesResult.error;
+  if (leadsResult.error) throw leadsResult.error;
+
+  data.properties = (propertiesResult.data || []).map(propertyFromDB);
+  data.leads = (leadsResult.data || []).map(leadFromDB);
+}
+
+/* STATUS */
 
 function statusClass(status) {
   const classes = {
@@ -144,7 +399,7 @@ function statusBadge(status) {
   return `<span class="status ${statusClass(status)}">${escapeHTML(status)}</span>`;
 }
 
-/* Navegação */
+/* NAVEGAÇÃO */
 
 function navigate(view) {
   const titles = {
@@ -164,9 +419,9 @@ function navigate(view) {
     button.classList.toggle("active", button.dataset.view === view);
   });
 
-  $("pageTitle").textContent = titles[view];
-  $("breadcrumb").textContent = titles[view];
-  $("sidebar").classList.remove("open");
+  if ($("pageTitle")) $("pageTitle").textContent = titles[view];
+  if ($("breadcrumb")) $("breadcrumb").textContent = titles[view];
+  if ($("sidebar")) $("sidebar").classList.remove("open");
 }
 
 document.querySelectorAll("[data-view]").forEach(button => {
@@ -177,11 +432,13 @@ document.querySelectorAll("[data-go]").forEach(button => {
   button.addEventListener("click", () => navigate(button.dataset.go));
 });
 
-$("menuToggle").addEventListener("click", () => {
-  $("sidebar").classList.toggle("open");
-});
+if ($("menuToggle")) {
+  $("menuToggle").addEventListener("click", () => {
+    $("sidebar").classList.toggle("open");
+  });
+}
 
-/* Modais */
+/* MODAIS */
 
 function openModal(id) {
   if (id === "leadModal") refreshPropertyOptions();
@@ -215,11 +472,12 @@ document.addEventListener("keydown", event => {
     document.querySelectorAll(".modal-backdrop.open").forEach(modal => {
       closeModal(modal.id);
     });
-    $("sidebar").classList.remove("open");
+
+    if ($("sidebar")) $("sidebar").classList.remove("open");
   }
 });
 
-/* Dashboard */
+/* DASHBOARD */
 
 function renderDashboard() {
   const properties = data.properties;
@@ -273,7 +531,7 @@ function renderDashboard() {
       </div>`;
 }
 
-/* Imóveis */
+/* IMÓVEIS */
 
 function resetPropertyForm() {
   $("propertyForm").reset();
@@ -322,14 +580,15 @@ function renderProperties() {
 $("propertySearch").addEventListener("input", renderProperties);
 $("propertyFilter").addEventListener("change", renderProperties);
 
-$("propertyForm").addEventListener("submit", event => {
+$("propertyForm").addEventListener("submit", async event => {
   event.preventDefault();
+  if (busy || !currentOrg) return;
 
   const id = $("propertyId").value;
   const existing = data.properties.find(p => p.id === id);
 
   const property = {
-    id: id || makeId("P"),
+    id,
     title: $("propertyTitle").value.trim(),
     type: $("propertyType").value,
     purpose: $("propertyPurpose").value,
@@ -342,27 +601,60 @@ $("propertyForm").addEventListener("submit", event => {
     createdAt: existing ? existing.createdAt : Date.now()
   };
 
-  if (!property.title || !property.city ||
-      !Number.isFinite(property.price) || property.price < 0) {
+  if (
+    !property.title ||
+    !property.city ||
+    !Number.isFinite(property.price) ||
+    property.price < 0
+  ) {
     notify("Confira os dados do imóvel.");
     return;
   }
 
-  if (existing) {
-    data.properties = data.properties.map(p => p.id === id ? property : p);
-  } else {
-    data.properties.push(property);
+  busy = true;
+
+  try {
+    let result;
+
+    if (existing) {
+      result = await supabaseClient
+        .from("imoveis")
+        .update(propertyToDB(property))
+        .eq("id", id)
+        .eq("imobiliaria_id", currentOrg.id)
+        .select("*")
+        .single();
+    } else {
+      result = await supabaseClient
+        .from("imoveis")
+        .insert(propertyToDB(property))
+        .select("*")
+        .single();
+    }
+
+    if (result.error) throw result.error;
+
+    const saved = propertyFromDB(result.data);
+
+    if (existing) {
+      data.properties = data.properties.map(p => p.id === id ? saved : p);
+    } else {
+      data.properties.unshift(saved);
+    }
+
+    closeModal("propertyModal");
+    resetPropertyForm();
+    renderAll();
+    notify(existing ? "Imóvel atualizado!" : "Imóvel cadastrado!");
+  } catch (error) {
+    console.error(error);
+    notify("Erro ao salvar imóvel: " + error.message);
+  } finally {
+    busy = false;
   }
-
-  if (!saveData()) return;
-
-  closeModal("propertyModal");
-  resetPropertyForm();
-  renderAll();
-  notify(existing ? "Imóvel atualizado!" : "Imóvel cadastrado!");
 });
 
-$("propertiesTable").addEventListener("click", event => {
+$("propertiesTable").addEventListener("click", async event => {
   const editButton = event.target.closest("[data-edit-property]");
   const deleteButton = event.target.closest("[data-delete-property]");
 
@@ -383,23 +675,50 @@ $("propertiesTable").addEventListener("click", event => {
     $("propertyModalTitle").textContent = "Editar imóvel";
 
     openModal("propertyModal");
+    return;
   }
 
   if (deleteButton) {
+    if (busy || !currentOrg) return;
+
     const id = deleteButton.dataset.deleteProperty;
     const p = data.properties.find(x => x.id === id);
     if (!p) return;
 
     if (!confirm(`Excluir "${p.title}"? Os interessados associados não serão excluídos.`)) return;
 
-    data.properties = data.properties.filter(x => x.id !== id);
-    if (!saveData()) return;
-    renderAll();
-    notify("Imóvel excluído.");
+    busy = true;
+
+    try {
+      const { data: deleted, error } = await supabaseClient
+        .from("imoveis")
+        .delete()
+        .eq("id", id)
+        .eq("imobiliaria_id", currentOrg.id)
+        .select("id");
+
+      if (error) throw error;
+      if (!deleted?.length) {
+        throw new Error("Nenhum imóvel foi excluído. Verifique as permissões.");
+      }
+
+      data.properties = data.properties.filter(x => x.id !== id);
+      data.leads = data.leads.map(lead =>
+        lead.propertyId === id ? { ...lead, propertyId: "" } : lead
+      );
+
+      renderAll();
+      notify("Imóvel excluído.");
+    } catch (error) {
+      console.error(error);
+      notify("Erro ao excluir imóvel: " + error.message);
+    } finally {
+      busy = false;
+    }
   }
 });
 
-/* Interessados */
+/* INTERESSADOS */
 
 function refreshPropertyOptions(selectedId = "") {
   const options = data.properties.map(p => `
@@ -431,7 +750,10 @@ function renderLeads() {
 
   const leads = data.leads.filter(lead => {
     const searchable = [
-      lead.name, lead.phone, lead.email, lead.agent,
+      lead.name,
+      lead.phone,
+      lead.email,
+      lead.agent,
       propertyName(lead.propertyId)
     ].join(" ").toLowerCase();
 
@@ -465,14 +787,15 @@ function renderLeads() {
 $("leadSearch").addEventListener("input", renderLeads);
 $("leadFilter").addEventListener("change", renderLeads);
 
-$("leadForm").addEventListener("submit", event => {
+$("leadForm").addEventListener("submit", async event => {
   event.preventDefault();
+  if (busy || !currentOrg) return;
 
   const id = $("leadId").value;
   const existing = data.leads.find(lead => lead.id === id);
 
   const lead = {
-    id: id || makeId("L"),
+    id,
     name: $("leadName").value.trim(),
     phone: $("leadPhone").value.trim(),
     email: $("leadEmail").value.trim(),
@@ -488,21 +811,50 @@ $("leadForm").addEventListener("submit", event => {
     return;
   }
 
-  if (existing) {
-    data.leads = data.leads.map(item => item.id === id ? lead : item);
-  } else {
-    data.leads.push(lead);
+  busy = true;
+
+  try {
+    let result;
+
+    if (existing) {
+      result = await supabaseClient
+        .from("interessados")
+        .update(leadToDB(lead))
+        .eq("id", id)
+        .eq("imobiliaria_id", currentOrg.id)
+        .select("*")
+        .single();
+    } else {
+      result = await supabaseClient
+        .from("interessados")
+        .insert(leadToDB(lead))
+        .select("*")
+        .single();
+    }
+
+    if (result.error) throw result.error;
+
+    const saved = leadFromDB(result.data);
+
+    if (existing) {
+      data.leads = data.leads.map(item => item.id === id ? saved : item);
+    } else {
+      data.leads.unshift(saved);
+    }
+
+    closeModal("leadModal");
+    resetLeadForm();
+    renderAll();
+    notify(existing ? "Interessado atualizado!" : "Interessado cadastrado!");
+  } catch (error) {
+    console.error(error);
+    notify("Erro ao salvar interessado: " + error.message);
+  } finally {
+    busy = false;
   }
-
-  if (!saveData()) return;
-
-  closeModal("leadModal");
-  resetLeadForm();
-  renderAll();
-  notify(existing ? "Interessado atualizado!" : "Interessado cadastrado!");
 });
 
-$("leadsTable").addEventListener("click", event => {
+$("leadsTable").addEventListener("click", async event => {
   const editButton = event.target.closest("[data-edit-lead]");
   const deleteButton = event.target.closest("[data-delete-lead]");
 
@@ -521,23 +873,46 @@ $("leadsTable").addEventListener("click", event => {
     refreshPropertyOptions(lead.propertyId);
 
     openModal("leadModal");
+    return;
   }
 
   if (deleteButton) {
+    if (busy || !currentOrg) return;
+
     const id = deleteButton.dataset.deleteLead;
     const lead = data.leads.find(x => x.id === id);
     if (!lead) return;
 
     if (!confirm(`Excluir o cadastro de "${lead.name}"?`)) return;
 
-    data.leads = data.leads.filter(x => x.id !== id);
-    if (!saveData()) return;
-    renderAll();
-    notify("Interessado excluído.");
+    busy = true;
+
+    try {
+      const { data: deleted, error } = await supabaseClient
+        .from("interessados")
+        .delete()
+        .eq("id", id)
+        .eq("imobiliaria_id", currentOrg.id)
+        .select("id");
+
+      if (error) throw error;
+      if (!deleted?.length) {
+        throw new Error("Nenhum interessado foi excluído. Verifique as permissões.");
+      }
+
+      data.leads = data.leads.filter(x => x.id !== id);
+      renderAll();
+      notify("Interessado excluído.");
+    } catch (error) {
+      console.error(error);
+      notify("Erro ao excluir interessado: " + error.message);
+    } finally {
+      busy = false;
+    }
   }
 });
 
-/* Funil comercial */
+/* FUNIL COMERCIAL */
 
 function renderPipeline() {
   const board = $("pipelineBoard");
@@ -572,27 +947,41 @@ function renderPipeline() {
   }).join("");
 }
 
-$("pipelineBoard").addEventListener("change", event => {
+$("pipelineBoard").addEventListener("change", async event => {
   const select = event.target.closest("[data-stage-lead]");
-  if (!select) return;
+  if (!select || busy || !currentOrg) return;
 
   const lead = data.leads.find(x => x.id === select.dataset.stageLead);
   if (!lead || !stages.includes(select.value)) return;
 
   const oldStatus = lead.status;
-  lead.status = select.value;
+  const newStatus = select.value;
 
-  if (!saveData()) {
+  busy = true;
+
+  try {
+    const { error } = await supabaseClient
+      .from("interessados")
+      .update({ status: newStatus })
+      .eq("id", lead.id)
+      .eq("imobiliaria_id", currentOrg.id);
+
+    if (error) throw error;
+
+    lead.status = newStatus;
+    renderAll();
+    notify("Etapa comercial atualizada.");
+  } catch (error) {
+    console.error(error);
     lead.status = oldStatus;
     renderAll();
-    return;
+    notify("Erro ao atualizar a etapa: " + error.message);
+  } finally {
+    busy = false;
   }
-
-  renderAll();
-  notify("Etapa comercial atualizada.");
 });
 
-/* Atualização geral */
+/* ATUALIZAÇÃO GERAL */
 
 function renderAll() {
   renderDashboard();
@@ -601,4 +990,39 @@ function renderAll() {
   renderPipeline();
 }
 
-renderAll();
+/* INICIALIZAÇÃO */
+
+async function initialize() {
+  if ($("loginForm")) {
+    $("loginForm").addEventListener("submit", login);
+  }
+
+  if ($("logoutButton")) {
+    $("logoutButton").addEventListener("click", logout);
+  }
+
+  if (!configurationReady || !supabaseClient) {
+    showLogin();
+    showLoginError(
+      "Falta configurar a URL do Supabase e a Publishable key no início do script.js."
+    );
+    return;
+  }
+
+  showLogin();
+
+  try {
+    const { data: result, error } = await supabaseClient.auth.getSession();
+
+    if (error) throw error;
+
+    if (result.session?.user) {
+      await enterApplication(result.session.user);
+    }
+  } catch (error) {
+    console.error("Erro ao recuperar a sessão:", error);
+    showLoginError("Não foi possível conectar ao Supabase. Confira a configuração.");
+  }
+}
+
+initialize();
