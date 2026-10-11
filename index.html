@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#111111">
+  <title>Marks Imob | Agência Marks</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-icon">M</div>
+        <div>
+          <strong>MARKS <span>IMOB</span></strong>
+          <small>AGÊNCIA MARKS</small>
+        </div>
+      </div>
+
+      <div class="menu-label">MENU PRINCIPAL</div>
+      <nav class="navigation">
+        <button class="nav-item active" data-view="dashboard">
+          <span>▦</span> Dashboard
+        </button>
+        <button class="nav-item" data-view="properties">
+          <span>⌂</span> Imóveis
+        </button>
+        <button class="nav-item" data-view="leads">
+          <span>♙</span> Interessados
+        </button>
+        <button class="nav-item" data-view="pipeline">
+          <span>⇄</span> Negociações
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="profile-avatar">AM</div>
+        <div class="profile-info">
+          <strong>Agência Marks</strong>
+          <small>Ambiente de demonstração</small>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="menu-toggle" id="menuToggle"
+          aria-label="Abrir menu">☰</button>
+        <div>
+          <div class="breadcrumb">Agência Marks / <span id="breadcrumb">Dashboard</span></div>
+          <h1 id="pageTitle">Dashboard</h1>
+        </div>
+        <div class="topbar-right">
+          <span class="status-dot"></span>
+          <span class="demo-label">DEMO</span>
+        </div>
+      </header>
+
+      <div class="content">
+
+        <section class="view active" id="view-dashboard">
+          <div class="welcome">
+            <div>
+              <span class="eyebrow">PAINEL COMERCIAL</span>
+              <h2>Visão geral do negócio<span>.</span></h2>
+              <p>Acompanhe seus imóveis, interessados e oportunidades.</p>
+            </div>
+            <button class="btn btn-primary" data-open="propertyModal">
+              + Novo imóvel
+            </button>
+          </div>
+
+          <div class="stats-grid">
+            <article class="stat-card">
+              <div class="stat-top"><span>Imóveis cadastrados</span><span class="stat-icon">⌂</span></div>
+              <strong id="statProperties">0</strong>
+              <small>Na sua carteira</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Imóveis disponíveis</span><span class="stat-icon">✓</span></div>
+              <strong id="statAvailable">0</strong>
+              <small>Disponíveis para negociação</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Interessados</span><span class="stat-icon">♙</span></div>
+              <strong id="statLeads">0</strong>
+              <small>Contatos cadastrados</small>
+            </article>
+            <article class="stat-card">
+              <div class="stat-top"><span>Em andamento</span><span class="stat-icon">⇄</span></div>
+              <strong id="statDeals">0</strong>
+              <small>Negociações abertas</small>
+            </article>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h3>Imóveis recentes</h3>
+                  <p>Últimos imóveis cadastrados</p>
+                </div>
+                <button class="text-btn" data-go="properties">Ver todos →</button>
+              </div>
+              <div id="recentProperties" class="recent-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h3>Atividade comercial</h3>
+                  <p>Resumo dos interessados</p>
+                </div>
+                <button class="text-btn" data-go="leads">Ver todos →</button>
+              </div>
+              <div id="recentLeads" class="recent-list"></div>
+            </section>
+          </div>
+
+          <div class="notice">
+            <div class="notice-icon">✦</div>
+            <div>
+              <strong>Organize sua operação em um só lugar</strong>
+              <p>Cadastre imóveis e interessados para acompanhar suas oportunidades.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-properties">
+          <div class="section-heading">
+            <div>
+              <h2>Carteira de imóveis</h2>
+              <p>Gerencie os imóveis cadastrados pela imobiliária.</p>
+            </div>
+            <button class="btn btn-primary" data-open="propertyModal">+ Cadastrar imóvel</button>
+          </div>
+
+          <div class="toolbar">
+            <input id="propertySearch" type="search" placeholder="Buscar por título, cidade ou código...">
+            <select id="propertyFilter" aria-label="Filtrar imóveis">
+              <option value="">Todos os status</option>
+              <option value="Disponível">Disponíveis</option>
+              <option value="Reservado">Reservados</option>
+              <option value="Vendido">Vendidos</option>
+              <option value="Alugado">Alugados</option>
+            </select>
+          </div>
+
+          <div class="panel table-panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>IMÓVEL</th>
+                    <th>LOCALIZAÇÃO</th>
+                    <th>VALOR</th>
+                    <th>STATUS</th>
+                    <th>AÇÕES</th>
+                  </tr>
+                </thead>
+                <tbody id="propertiesTable"></tbody>
+              </table>
+            </div>
+            <div id="propertiesEmpty" class="empty-state" hidden>
+              <div>⌂</div><strong>Nenhum imóvel encontrado</strong>
+              <p>Cadastre seu primeiro imóvel ou altere a pesquisa.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-leads">
+          <div class="section-heading">
+            <div>
+              <h2>Interessados</h2>
+              <p>Organize os contatos e acompanhe cada oportunidade.</p>
+            </div>
+            <button class="btn btn-primary" data-open="leadModal">+ Novo interessado</button>
+          </div>
+
+          <div class="toolbar">
+            <input id="leadSearch" type="search" placeholder="Buscar por nome, telefone ou e-mail...">
+            <select id="leadFilter" aria-label="Filtrar interessados">
+              <option value="">Todas as etapas</option>
+              <option value="Novo">Novo</option>
+              <option value="Em contato">Em contato</option>
+              <option value="Visita agendada">Visita agendada</option>
+              <option value="Proposta enviada">Proposta enviada</option>
+              <option value="Concluído">Concluído</option>
+              <option value="Perdido">Perdido</option>
+            </select>
+          </div>
+
+          <div class="panel table-panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>INTERESSADO</th>
+                    <th>CONTATO</th>
+                    <th>IMÓVEL DE INTERESSE</th>
+                    <th>ETAPA</th>
+                    <th>AÇÕES</th>
+                  </tr>
+                </thead>
+                <tbody id="leadsTable"></tbody>
+              </table>
+            </div>
+            <div id="leadsEmpty" class="empty-state" hidden>
+              <div>♙</div><strong>Nenhum interessado encontrado</strong>
+              <p>Cadastre seu primeiro contato para começar.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-pipeline">
+          <div class="section-heading">
+            <div>
+              <h2>Funil comercial</h2>
+              <p>Acompanhe a evolução dos interessados.</p>
+            </div>
+            <button class="btn btn-primary" data-open="leadModal">+ Novo interessado</button>
+          </div>
+          <div id="pipelineBoard" class="pipeline-board"></div>
+        </section>
+
+        <footer class="footer">
+          <span>MARKS IMOB</span>
+          <span>Protótipo de demonstração · Agência Marks</span>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal de imóvel -->
+  <div class="modal-backdrop" id="propertyModal">
+    <div class="modal">
+      <div class="modal-heading">
+        <div><span class="eyebrow">CARTEIRA IMOBILIÁRIA</span><h2 id="propertyModalTitle">Cadastrar imóvel</h2></div>
+        <button class="close-btn" data-close="propertyModal" aria-label="Fechar">×</button>
+      </div>
+      <form id="propertyForm">
+        <input type="hidden" id="propertyId">
+        <label>Título do imóvel<input id="propertyTitle" required maxlength="100" placeholder="Ex.: Apartamento com 2 quartos"></label>
+        <div class="form-grid">
+          <label>Tipo
+            <select id="propertyType" required>
+              <option value="Casa">Casa</option>
+              <option value="Apartamento">Apartamento</option>
+              <option value="Terreno">Terreno</option>
+              <option value="Comercial">Comercial</option>
+              <option value="Rural">Rural</option>
+            </select>
+          </label>
+          <label>Finalidade
+            <select id="propertyPurpose">
+              <option value="Venda">Venda</option>
+              <option value="Aluguel">Aluguel</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-grid">
+          <label>Preço (R$)<input id="propertyPrice" type="number" min="0" step="0.01" required placeholder="250000"></label>
+          <label>Quartos<input id="propertyBedrooms" type="number" min="0" max="100" value="2"></label>
+        </div>
+        <div class="form-grid">
+          <label>Cidade<input id="propertyCity" required maxlength="80" placeholder="Cidade"></label>
+          <label>Bairro<input id="propertyNeighborhood" maxlength="80" placeholder="Bairro"></label>
+        </div>
+        <label>Endereço ou referência<input id="propertyAddress" maxlength="150" placeholder="Endereço (opcional)"></label>
+        <label>Status
+          <select id="propertyStatus">
+            <option value="Disponível">Disponível</option>
+            <option value="Reservado">Reservado</option>
+            <option value="Vendido">Vendido</option>
+            <option value="Alugado">Alugado</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close="propertyModal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar imóvel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal de interessado -->
+  <div class="modal-backdrop" id="leadModal">
+    <div class="modal">
+      <div class="modal-heading">
+        <div><span class="eyebrow">GESTÃO COMERCIAL</span><h2 id="leadModalTitle">Novo interessado</h2></div>
+        <button class="close-btn" data-close="leadModal" aria-label="Fechar">×</button>
+      </div>
+      <form id="leadForm">
+        <input type="hidden" id="leadId">
+        <label>Nome completo<input id="leadName" required maxlength="100" placeholder="Nome do interessado"></label>
+        <div class="form-grid">
+          <label>Telefone<input id="leadPhone" type="tel" maxlength="30" placeholder="(00) 00000-0000"></label>
+          <label>E-mail<input id="leadEmail" type="email" maxlength="120" placeholder="email@exemplo.com"></label>
+        </div>
+        <label>Imóvel de interesse
+          <select id="leadProperty"><option value="">Ainda não definido</option></select>
+        </label>
+        <label>Corretor responsável<input id="leadAgent" maxlength="100" placeholder="Nome do corretor"></label>
+        <label>Etapa comercial
+          <select id="leadStatus">
+            <option value="Novo">Novo</option>
+            <option value="Em contato">Em contato</option>
+            <option value="Visita agendada">Visita agendada</option>
+            <option value="Proposta enviada">Proposta enviada</option>
+            <option value="Concluído">Concluído</option>
+            <option value="Perdido">Perdido</option>
+          </select>
+        </label>
+        <label>Observações<textarea id="leadNotes" maxlength="1000" rows="3" placeholder="Preferências e próximos passos"></textarea></label>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close="leadModal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar interessado</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="script.js"></script>
+</body>
+</html>
